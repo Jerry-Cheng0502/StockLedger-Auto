@@ -1,81 +1,179 @@
 # 國泰證券自動化對帳單解析與 FIFO 損益記帳系統
 
-一個基於 Python 的自動化理財工具。本專案透過 **`uv`** 進行專案與環境管理，能自動登入 Gmail 下載最新「國泰證券日對帳單」PDF，解密並解析內部交易表格，再利用**先進先出 (FIFO) 算法**自動沖銷庫存，精確計算出每筆交易的買進/賣出時間與實現損益，最後匯出成精美的 Excel 報表。
+一個基於 Python 的自動化理財工具。本專案透過 **`uv`** 進行執行環境管理，能自動登入 Gmail 批次下載指定日期範圍的「國泰證券日對帳單」PDF，解密並解析內部交易表格，再利用**先進先出 (FIFO) 算法**自動沖銷庫存，精確計算出每筆交易的買進/賣出時間與實現損益，同時追蹤未賣出的庫存成本，最後匯出成多工作表的 Excel 報表。
 
 ## 🌟 功能特色
 
-- **自動化郵件對帳單下載**：連線 Gmail 伺服器，自動過濾並下載最新的國泰證券 PDF 對帳單。
+- **Gmail 批次下載**：依郵件寄送日期範圍，一次下載所有符合條件的國泰證券 PDF 對帳單，已下載的自動略過，不重複抓取。
+- **批次 PDF 解析**：支援指定單一 PDF 或掃描整個資料夾，一次處理多個對帳單。
 - **安全 PDF 解密**：支援輸入身分證字號自動解密受密碼保護的國泰對帳單。
-- **智慧防呆機制**：自動比對 Excel 歷史紀錄，若對帳單日期已存在則安全終止，避免重複寫入與計算。
+- **智慧防呆機制**：自動比對 Excel 歷史紀錄，若對帳單日期已存在則略過，避免重複寫入與計算。
 - **核心 FIFO 損益模型**：自動配對買賣股票，精確拆解並追蹤「買進時間」與「賣出時間」，計算包含手續費及交易稅的精確「總獲利」與「報酬率」。
-- **雙工作表 Excel 輸出**：
-  - `實現損益總表`：呈現精美的 FIFO 配對損益與回報率。
-  - `交易明細歷史`：完整保存最原始的交易底稿，作為庫存計算的基石。
+- **未實現庫存追蹤**：自動彙整尚未賣出的持股，列出買進時間、持有股數與帳面成本。
+- **多維度 Excel 報表**：
+  - `實現損益總表`：FIFO 配對損益，依賣出時間排序。
+  - `未實現庫存`：現有持股成本，依買進時間排序。
+  - `交易明細歷史`：完整的原始交易底稿。
+  - `月報` / `年報`：自動彙整各期間損益、交易次數與費用。
+  - `個股彙整`：各股票累計損益與平均報酬率排行。
+- **終端機摘要**：執行後直接在 terminal 顯示損益概況、前三名個股，免開 Excel 也能一目瞭然。
 
 ---
 
 ## 🛠️ 開發環境與套件
 
-專案全面採用 **`uv`** 進行管理，主要依賴以下強大生態系：
+腳本採用 `uv` inline script metadata，**不需要建立專案或 `pyproject.toml`**，直接 `uv run` 即可自動安裝所有依賴：
 
 - **`pdfplumber`**：精確解析 PDF 表格與文字內容。
-- **`pandas` & `numpy`**：核心數據清洗與 FIFO 算力支撐。
-- **`openpyxl`**：高質量 Excel 活頁簿寫入。
-- **`python-dotenv`**：環境變數與敏感私鑰管理。
+- **`pandas`**：核心數據清洗與 FIFO 計算。
+- **`openpyxl`**：Excel 活頁簿寫入與欄寬調整。
+- **`python-dotenv`**：環境變數與敏感憑證管理。
 
 ---
 
-## 🚀 快速開始 (使用 `uv`)
+## 🚀 快速開始
 
-### 1. 複製專案與初始化
+### 1. 安裝 `uv`
 
-確保你的電腦已安裝 [uv](https://github.com/astral-sh/uv)。在專案根目錄下執行以下指令初始化專案並同步依賴：
+若尚未安裝 `uv`，請參考 [官方文件](https://docs.astral.sh/uv/getting-started/installation/) 安裝：
 
 ```bash
-# 建立/同步虛擬環境並安裝所有宣告在 pyproject.toml 的套件
-uv sync
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
 ### 2. 環境設定 (`.env`)
 
-請在專案根目錄建立一個 `.env` 檔案，並填入你的個人憑證。這能讓腳本完全自動化運行，免去手動輸入的麻煩：
+在腳本同目錄下建立 `.env` 檔案，填入個人憑證：
 
 ```env
-# 國泰對帳單 PDF 解密密碼 (通常為身分證字號，英文字母需大寫)
+# 國泰對帳單 PDF 解密密碼（通常為身分證字號，英文字母需大寫）
 CATHAY_ID=A123456789
 
-# Gmail 自動下載設定 (選填，若不填則手動將 PDF 放至專案根目錄)
+# Gmail 自動下載設定（選填，若不填則手動將 PDF 放至目錄）
 GMAIL_USER=your_email@gmail.com
-# 請注意：此處需填入 Gmail 的「應用程式密碼」，而非一般登入密碼
+# 請填入 Gmail 的「應用程式密碼」，而非一般登入密碼
 GMAIL_APP_PASSWORD=abcd efgh ijkl mnop
+# 可選：自訂寄件方（預設為國泰官方寄件地址）
+# GMAIL_SENDER=e-notification@ebill1.cathaysec.com.tw
 ```
 
 ### 3. 執行程式
 
-使用 `uv run` 執行主要腳本，`uv` 會自動在正確的虛擬環境中運行它：
+`uv run` 會自動讀取腳本頂部的依賴宣告，首次執行時自動安裝套件，之後快取沿用：
 
 ```bash
-uv run main.py
+uv run cathay_stock_parser.py
 ```
+
+---
+
+## 📖 使用方式
+
+### 輸入來源（三選一）
+
+```bash
+# 指定單一 PDF
+uv run cathay_stock_parser.py --pdf 國泰證券日對帳單.pdf
+
+# 批次掃描資料夾內所有 PDF
+uv run cathay_stock_parser.py --folder ./pdfs/
+
+# 從 Gmail 下載（見下方說明）
+uv run cathay_stock_parser.py --gmail
+```
+
+### Gmail 批次下載
+
+```bash
+# 下載所有歷史郵件
+uv run cathay_stock_parser.py --gmail
+
+# 只下載特定日期範圍的郵件
+uv run cathay_stock_parser.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
+
+# 指定 PDF 存放資料夾（預設：./gmail_pdfs）
+uv run cathay_stock_parser.py --gmail --gmail-start 2025/01/01 --gmail-save-dir ./2025_pdfs
+```
+
+> `--gmail-start` / `--gmail-end` 是依據**郵件寄送日期**篩選，與損益報表的時間範圍篩選（`--start` / `--end`）是獨立的兩組參數。
+
+### 損益篩選與輸出控制
+
+```bash
+# 只看特定時間範圍的損益（不影響 FIFO 計算邏輯，只影響報表顯示）
+uv run cathay_stock_parser.py --start 2024/01/01 --end 2024/12/31
+
+# 只看特定股票（支援部分比對）
+uv run cathay_stock_parser.py --stock 台積電
+
+# 指定 Excel 輸出路徑
+uv run cathay_stock_parser.py --output ./reports/2024.xlsx
+
+# Dry-run：只印出摘要，不寫入 Excel
+uv run cathay_stock_parser.py --dry-run
+```
+
+### 完整參數列表
+
+| 參數 | 說明 |
+|------|------|
+| `--pdf FILE` | 指定單一 PDF 路徑 |
+| `--folder DIR` | 批次掃描資料夾內所有 PDF |
+| `--gmail` | 從 Gmail 批次下載對帳單 |
+| `--gmail-start YYYY/MM/DD` | Gmail 篩選起始日（含） |
+| `--gmail-end YYYY/MM/DD` | Gmail 篩選結束日（含） |
+| `--gmail-save-dir DIR` | PDF 下載存放資料夾（預設：`./gmail_pdfs`） |
+| `--start YYYY/MM/DD` | 損益報表篩選起始日（含） |
+| `--end YYYY/MM/DD` | 損益報表篩選結束日（含） |
+| `--stock NAME` | 只顯示特定股票（部分比對） |
+| `--output FILE` | Excel 輸出路徑（預設：`股票對帳單總表.xlsx`） |
+| `--password ID` | 身分證字號（不傳則從 `.env` 或互動輸入） |
+| `--dry-run` | 只印摘要，不寫入 Excel |
 
 ---
 
 ## 📊 資料流與 FIFO 模型說明
 
-系統運作邏輯如下：
-
-1. **資料搜集**：從 Gmail 抓取或讀取本地 `國泰證券日對帳單.pdf`。
-2. **防呆檢查**：提取 PDF 內交易日期，確認 `股票對帳單總表.xlsx` 內無重複日期後繼續。
-3. **明細合併**：將當日新明細與 `交易明細歷史` 合併。
-4. **FIFO 沖銷**：
-   - 遇「買進」則推入該股票的庫存池（記錄時間、股數、單價與手續費）。
-   - 遇「賣出」則從庫存池中由舊到新依序扣除股數，並計算該次沖銷的實現損益。
-5. **產生報表**：更新並寫入 `股票對帳單總表.xlsx`。
+```
+Gmail / 本地 PDF
+       │
+       ▼
+  PDF 解密與解析
+  （提取交易日期與明細表格）
+       │
+       ▼
+  防呆檢查
+  （跳過已寫入過的日期）
+       │
+       ▼
+  合併歷史明細
+  （新資料 + 交易明細歷史）
+       │
+       ▼
+  FIFO 沖銷引擎
+  ┌────────────────────────┐
+  │ 買進 → 推入庫存池      │
+  │ 賣出 → 由舊到新配對    │
+  │        計算實現損益    │
+  │ 剩餘 → 未實現庫存      │
+  └────────────────────────┘
+       │
+       ▼
+  彙整報表（月報/年報/個股）
+       │
+       ▼
+  寫入 Excel（多工作表）
+```
 
 ---
 
 ## 📝 注意事項
 
-1. **Gmail 權限**：若要使用自動下載功能，請確保你的 Gmail 已開啟 IMAP 存取功能，並至 Google 帳戶安全性設定中申請一組「應用程式密碼」填入 `.env`。
-2. **手動模式**：若不使用 Gmail 自動下載，只需將下載下來的對帳單更名為 `國泰證券日對帳單.pdf` 並放置於專案根目錄，程式將自動切換為本地讀取模式。
-3. **檔案佔用**：執行程式前，請確保輸出目標 `股票對帳單總表.xlsx` 處於關閉狀態，避免因 Windows 檔案鎖定導致寫入失敗。
+1. **Gmail 應用程式密碼**：需至 [Google 帳戶安全性設定](https://myaccount.google.com/apppasswords) 申請專用的應用程式密碼，並確保帳戶已開啟 IMAP 存取功能。一般登入密碼無法使用。
+2. **手動模式**：若不使用 Gmail，只需將對帳單 PDF 放至指定路徑或資料夾，以 `--pdf` 或 `--folder` 參數執行即可。
+3. **檔案佔用**：執行前請確保 Excel 檔案處於關閉狀態，避免 Windows 檔案鎖定導致寫入失敗。
+4. **損益篩選不影響計算**：`--start` / `--end` 只篩選輸出報表的顯示範圍，FIFO 計算仍基於完整歷史資料，確保庫存配對的正確性。
