@@ -66,7 +66,7 @@ GMAIL_APP_PASSWORD=abcd efgh ijkl mnop
 `uv run` 會自動讀取腳本頂部的依賴宣告，首次執行時自動安裝套件，之後快取沿用：
 
 ```bash
-uv run cathay_stock_parser.py
+uv run main.py
 ```
 
 ---
@@ -77,26 +77,26 @@ uv run cathay_stock_parser.py
 
 ```bash
 # 指定單一 PDF
-uv run cathay_stock_parser.py --pdf 國泰證券日對帳單.pdf
+uv run main.py --pdf 國泰證券日對帳單.pdf
 
 # 批次掃描資料夾內所有 PDF
-uv run cathay_stock_parser.py --folder ./pdfs/
+uv run main.py --folder ./pdfs/
 
 # 從 Gmail 下載（見下方說明）
-uv run cathay_stock_parser.py --gmail
+uv run main.py --gmail
 ```
 
 ### Gmail 批次下載
 
 ```bash
 # 下載所有歷史郵件
-uv run cathay_stock_parser.py --gmail
+uv run main.py --gmail
 
 # 只下載特定日期範圍的郵件
-uv run cathay_stock_parser.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
+uv run main.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
 
 # 指定 PDF 存放資料夾（預設：./gmail_pdfs）
-uv run cathay_stock_parser.py --gmail --gmail-start 2025/01/01 --gmail-save-dir ./2025_pdfs
+uv run main.py --gmail --gmail-start 2025/01/01 --gmail-save-dir ./2025_pdfs
 ```
 
 > `--gmail-start` / `--gmail-end` 是依據**郵件寄送日期**篩選，與損益報表的時間範圍篩選（`--start` / `--end`）是獨立的兩組參數。
@@ -105,16 +105,16 @@ uv run cathay_stock_parser.py --gmail --gmail-start 2025/01/01 --gmail-save-dir 
 
 ```bash
 # 只看特定時間範圍的損益（不影響 FIFO 計算邏輯，只影響報表顯示）
-uv run cathay_stock_parser.py --start 2024/01/01 --end 2024/12/31
+uv run main.py --start 2024/01/01 --end 2024/12/31
 
 # 只看特定股票（支援部分比對）
-uv run cathay_stock_parser.py --stock 台積電
+uv run main.py --stock 台積電
 
 # 指定 Excel 輸出路徑
-uv run cathay_stock_parser.py --output ./reports/2024.xlsx
+uv run main.py --output ./reports/2024.xlsx
 
 # Dry-run：只印出摘要，不寫入 Excel
-uv run cathay_stock_parser.py --dry-run
+uv run main.py --dry-run
 ```
 
 ### 完整參數列表
