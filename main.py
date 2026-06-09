@@ -1,35 +1,3 @@
-"""
-國泰證券對帳單解析器（升級版）
-===============================
-功能：
-  - 支援 CLI 參數（日期範圍、模式、路徑等）
-  - 批次處理資料夾內所有 PDF
-  - 計算「實現損益」與「未實現損益（現有庫存）」
-  - 月報 / 年報自動彙整
-  - Gmail 批次下載（依郵件寄送日期範圍，可選）
-
-使用範例：
-  # 基本用法（互動模式）
-  uv run main.py
-
-  # 指定單一 PDF
-  uv run main.py --pdf 國泰證券日對帳單.pdf
-
-  # 批次處理資料夾
-  uv run main.py --folder ./pdfs/
-
-  # 從 Gmail 下載「所有」國泰對帳單郵件
-  uv run main.py --gmail
-
-  # 從 Gmail 只下載特定日期範圍內的郵件（依郵件寄送日期）
-  uv run main.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
-
-  # 只看特定損益範圍
-  uv run main.py --start 2024/01/01 --end 2024/12/31
-
-  # 不寫入 Excel，只印出摘要
-  uv run main.py --dry-run
-"""
 
 """
 國泰證券對帳單解析器（升級版）
@@ -43,31 +11,29 @@
 
 使用範例：
   # 基本用法（互動模式）
-  uv run main.py
+  python main.py
 
   # 指定單一 PDF
-  uv run main.py --pdf 國泰證券日對帳單.pdf
+  python main.py --pdf 國泰證券日對帳單.pdf
 
   # 批次處理資料夾
-  uv run main.py --folder ./pdfs/
+  python main.py --folder ./pdfs/
 
   # 從 Gmail 下載「所有」國泰對帳單郵件
-  uv run main.py --gmail
+  python main.py --gmail
 
   # 從 Gmail 只下載特定日期範圍內的郵件（依郵件寄送日期）
-  uv run main.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
+  python main.py --gmail --gmail-start 2024/01/01 --gmail-end 2024/12/31
 
   # 只看特定損益範圍
-  uv run main.py --start 2024/01/01 --end 2024/12/31
+  python main.py --start 2024/01/01 --end 2024/12/31
 
   # 不寫入 Excel，只印出摘要
-  uv run main.py --dry-run
+  python main.py --dry-run
 """
 
 import os
 import re
-import sys
-import argparse
 import sys
 import argparse
 import imaplib
@@ -77,102 +43,15 @@ from pathlib import Path
 from datetime import datetime, date
 
 import pdfplumber
-from pathlib import Path
-from datetime import datetime, date
-
-import pdfplumber
 import pandas as pd
 
 # ── 嘗試載入 .env ──────────────────────────────────────────────────────────────
-# ── 嘗試載入 .env ──────────────────────────────────────────────────────────────
 try:
-    from dotenv import load_dotenv
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ⚙️  設定常數（可透過環境變數覆寫）
-# ══════════════════════════════════════════════════════════════════════════════
-DEFAULT_PDF_PATH    = os.getenv("PDF_PATH",    "國泰證券日對帳單.pdf")
-DEFAULT_PDF_FOLDER  = os.getenv("PDF_FOLDER",  "./pdfs")
-DEFAULT_EXCEL_PATH  = os.getenv("EXCEL_PATH",  "股票對帳單總表.xlsx")
-GMAIL_USER          = os.getenv("GMAIL_USER")
-GMAIL_APP_PASSWORD  = os.getenv("GMAIL_APP_PASSWORD")
-GMAIL_SENDER        = os.getenv("GMAIL_SENDER", "e-notification@ebill1.cathaysec.com.tw")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 🔧  CLI 參數解析
-# ══════════════════════════════════════════════════════════════════════════════
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="國泰證券對帳單解析器",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    # 輸入來源
-    src = parser.add_mutually_exclusive_group()
-    src.add_argument("--pdf",    metavar="FILE",   help="指定單一 PDF 路徑")
-    src.add_argument("--folder", metavar="DIR",    help="批次掃描資料夾內所有 PDF")
-    src.add_argument("--gmail",  action="store_true", help="從 Gmail 批次下載國泰對帳單")
-
-    # Gmail 郵件日期範圍（只在 --gmail 時有效）
-    parser.add_argument("--gmail-start", metavar="YYYY/MM/DD",
-                        help="只下載此日期之後寄出的郵件（依郵件寄送日，含）")
-    parser.add_argument("--gmail-end",   metavar="YYYY/MM/DD",
-                        help="只下載此日期之前寄出的郵件（依郵件寄送日，含）")
-    parser.add_argument("--gmail-save-dir", metavar="DIR", default="./gmail_pdfs",
-                        help="Gmail 下載的 PDF 存放資料夾（預設：./gmail_pdfs）")
-
-    # 輸出
-    parser.add_argument("--output", metavar="FILE", default=DEFAULT_EXCEL_PATH,
-                        help=f"Excel 輸出路徑（預設：{DEFAULT_EXCEL_PATH}）")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="只顯示摘要，不寫入 Excel")
-
-    # 篩選
-    parser.add_argument("--start", metavar="YYYY/MM/DD",
-                        help="損益篩選起始日（含）")
-    parser.add_argument("--end",   metavar="YYYY/MM/DD",
-                        help="損益篩選結束日（含）")
-    parser.add_argument("--stock", metavar="NAME",
-                        help="只看特定股票（支援部分比對，例如：台積電）")
-
-    # 報表模式
-    parser.add_argument("--report", choices=["monthly", "yearly", "stock", "all"],
-                        default="all", help="彙整報表類型（預設：all）")
-
-    # 密碼
-    parser.add_argument("--password", metavar="ID",
-                        help="身分證字號（若不傳則從環境變數或互動輸入）")
-
-    return parser.parse_args()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 📨  Gmail 批次下載（依郵件寄送日期範圍）
-# ══════════════════════════════════════════════════════════════════════════════
-def _imap_date(dt: datetime) -> str:
-    """將 datetime 轉為 IMAP SINCE/BEFORE 格式，例如 '01-Jan-2024'"""
-    return dt.strftime("%d-%b-%Y")
-
-
-def fetch_pdfs_from_gmail(
-    save_dir: str,
-    start_date: str | None = None,
-    end_date:   str | None = None,
-) -> list[str]:
-    """
-    從 Gmail 下載所有符合條件的國泰對帳單 PDF。
-
-    參數：
-        save_dir   — PDF 儲存資料夾
-        start_date — 郵件寄送起始日（"YYYY/MM/DD"），None 表示不限
-        end_date   — 郵件寄送結束日（"YYYY/MM/DD"），None 表示不限
-
-    回傳：下載成功的 PDF 路徑清單
-    """
 # ══════════════════════════════════════════════════════════════════════════════
 # ⚙️  設定常數（可透過環境變數覆寫）
 # ══════════════════════════════════════════════════════════════════════════════
@@ -283,45 +162,14 @@ def fetch_pdfs_from_gmail(
     downloaded: list[str] = []
 
     try:
-        print("⚠️  未設定 GMAIL_USER / GMAIL_APP_PASSWORD，略過 Gmail 下載。")
-        return []
-
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
-
-    # ── 建立 IMAP 搜尋條件 ───────────────────────────────────────────────────
-    criteria_parts = [f'FROM "{GMAIL_SENDER}"']
-
-    if start_date:
-        dt_start = datetime.strptime(start_date, "%Y/%m/%d")
-        criteria_parts.append(f'SINCE "{_imap_date(dt_start)}"')
-    if end_date:
-        # IMAP BEFORE 是「嚴格小於」，所以要加一天
-        from datetime import timedelta
-        dt_end = datetime.strptime(end_date, "%Y/%m/%d") + timedelta(days=1)
-        criteria_parts.append(f'BEFORE "{_imap_date(dt_end)}"')
-
-    search_criterion = "(" + " ".join(criteria_parts) + ")"
-
-    range_desc = []
-    if start_date: range_desc.append(f"從 {start_date}")
-    if end_date:   range_desc.append(f"到 {end_date}")
-    range_str = "、".join(range_desc) if range_desc else "全部"
-    print(f"📬 連線至 Gmail，搜尋國泰對帳單郵件（{range_str}）…")
-
-    downloaded: list[str] = []
-
-    try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select("inbox")
 
         status, messages = mail.search("UTF-8", search_criterion)
-        status, messages = mail.search("UTF-8", search_criterion)
         if status != "OK" or not messages[0]:
             print("⚠️  未找到符合條件的郵件。")
-            print("⚠️  未找到符合條件的郵件。")
             mail.logout()
-            return []
             return []
 
         mail_ids = messages[0].split()
@@ -347,52 +195,7 @@ def fetch_pdfs_from_gmail(
                         continue
                     if not part.get("Content-Disposition"):
                         continue
-        print(f"  📧 共找到 {len(mail_ids)} 封符合郵件，開始逐一下載附件…")
 
-        for idx, mail_id in enumerate(mail_ids, 1):
-            try:
-                _, data = mail.fetch(mail_id, "(RFC822)")
-                msg = email.message_from_bytes(data[0][1])
-
-                # 取得郵件寄送日期（供檔名使用）
-                mail_date_str = msg.get("Date", "")
-                try:
-                    from email.utils import parsedate_to_datetime
-                    mail_dt = parsedate_to_datetime(mail_date_str)
-                    date_tag = mail_dt.strftime("%Y%m%d")
-                except Exception:
-                    date_tag = f"mail{idx:04d}"
-
-                found_pdf = False
-                for part in msg.walk():
-                    if part.get_content_maintype() == "multipart":
-                        continue
-                    if not part.get("Content-Disposition"):
-                        continue
-
-                    filename = part.get_filename()
-                    if not filename:
-                        continue
-
-                    decoded, charset = decode_header(filename)[0]
-                    if isinstance(decoded, bytes):
-                        filename = decoded.decode(charset or "utf-8")
-
-                    if not filename.lower().endswith(".pdf"):
-                        continue
-
-                    # 以「郵件日期_原始檔名」命名，避免衝突
-                    safe_name = f"{date_tag}_{filename}"
-                    save_path = os.path.join(save_dir, safe_name)
-
-                    # 若已存在相同檔案則跳過（冪等）
-                    if os.path.exists(save_path):
-                        print(f"  [{idx}/{len(mail_ids)}] ⏭️  已存在，略過：{safe_name}")
-                        downloaded.append(save_path)
-                        found_pdf = True
-                        break
-
-                    with open(save_path, "wb") as f:
                     filename = part.get_filename()
                     if not filename:
                         continue
@@ -421,17 +224,6 @@ def fetch_pdfs_from_gmail(
                     downloaded.append(save_path)
                     found_pdf = True
                     break
-                    print(f"  [{idx}/{len(mail_ids)}] 📥 已下載：{safe_name}")
-                    downloaded.append(save_path)
-                    found_pdf = True
-                    break
-
-                if not found_pdf:
-                    print(f"  [{idx}/{len(mail_ids)}] ⚠️  第 {idx} 封郵件無 PDF 附件，略過。")
-
-            except Exception as e:
-                print(f"  [{idx}/{len(mail_ids)}] ❌ 處理郵件失敗：{e}")
-                continue
 
                 if not found_pdf:
                     print(f"  [{idx}/{len(mail_ids)}] ⚠️  第 {idx} 封郵件無 PDF 附件，略過。")
@@ -441,8 +233,6 @@ def fetch_pdfs_from_gmail(
                 continue
 
         mail.logout()
-        print(f"\n✅ Gmail 下載完成，共取得 {len(downloaded)} 個 PDF，存放於：{save_dir}")
-        return downloaded
         print(f"\n✅ Gmail 下載完成，共取得 {len(downloaded)} 個 PDF，存放於：{save_dir}")
         return downloaded
 
@@ -482,43 +272,7 @@ def parse_pdf(pdf_path: str, password: str) -> tuple[str | None, list[dict]]:
                         prod  = str(row[0]).strip()
                         categ = str(row[1]).strip()
                         if any(kw in prod for kw in ("商品名稱", "總合計", "成交日期")) or not row[0]:
-        print(f"❌ Gmail 連線失敗：{e}")
-        return []
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 📂  PDF 解析
-# ══════════════════════════════════════════════════════════════════════════════
-def parse_pdf(pdf_path: str, password: str) -> tuple[str | None, list[dict]]:
-    """
-    解析單一 PDF，回傳 (trade_date, raw_rows)。
-    trade_date 格式為 "YYYY/MM/DD"；raw_rows 為原始表格列。
-    """
-    trade_date = None
-    raw_rows: list[dict] = []
-
-    try:
-        with pdfplumber.open(pdf_path, password=password) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                text_clean = re.sub(r"\s+", "", text)
-
-                # 解析民國日期
-                if trade_date is None:
-                    m = re.search(r"證券日對帳單(\d{2,3})年(\d{1,2})月(\d{1,2})日", text_clean)
-                    if m:
-                        ry, mo, dy = m.groups()
-                        trade_date = f"{int(ry)+1911}/{int(mo):02d}/{int(dy):02d}"
-
-                for table in page.extract_tables():
-                    for row in table:
-                        if not row or len(row) < 7:
                             continue
-                        prod  = str(row[0]).strip()
-                        categ = str(row[1]).strip()
-                        if any(kw in prod for kw in ("商品名稱", "總合計", "成交日期")) or not row[0]:
-                            continue
-                        if "買" in categ or "賣" in categ:
                         if "買" in categ or "賣" in categ:
                             raw_rows.append(row)
 
@@ -685,6 +439,9 @@ def run_fifo(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             })
  
     return pd.DataFrame(realized), pd.DataFrame(inventory)
+
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 📊  彙整報表生成
